@@ -1,0 +1,18 @@
+services:
+  windrose:
+    image: ghcr.io/falcononrails/windrose-arm64-server:latest
+    container_name: windrose-server
+    build:
+      context: .
+    platform: linux/arm64
+    restart: unless-stopped
+    stop_grace_period: 30s
+    env_file:
+      - .env
+    volumes:
+      - ./data/server:/server
+      - ./data/wine:/home/steam/.wine
+    # Direct IP mode is experimental on ARM64. Leave these disabled for invite-code mode.
+    # ports:
+    #   - "7777:7777/tcp"
+    #   - "7777:7777/udp"
