@@ -28,6 +28,7 @@ STEAMCMD="${STEAMCMD:-/home/steam/steamcmd/steamcmd.sh}"
 
 SERVER_NAME="${SERVER_NAME:-Windrose ARM64}"
 SERVER_PASSWORD="${SERVER_PASSWORD:-}"
+SERVER_INVITE_CODE="${SERVER_INVITE_CODE:-}"
 MAX_PLAYERS="${MAX_PLAYERS:-8}"
 USER_SELECTED_REGION="${USER_SELECTED_REGION:-EU}"
 UPDATE_ON_START="${UPDATE_ON_START:-true}"
@@ -45,6 +46,10 @@ export HODLL64="${HODLL64:-libarm64ecfex.dll}"
 require_number "MAX_PLAYERS" "$MAX_PLAYERS"
 require_number "SERVER_PORT" "$SERVER_PORT"
 require_number "CONFIG_BOOT_TIMEOUT" "$CONFIG_BOOT_TIMEOUT"
+if [ -n "$SERVER_INVITE_CODE" ] && ! [[ "$SERVER_INVITE_CODE" =~ ^[0-9A-Za-z]{6,}$ ]]; then
+  log "SERVER_INVITE_CODE must be at least 6 alphanumeric characters"
+  exit 64
+fi
 
 SERVER_EXEC="$SERVER_DIR/R5/Binaries/Win64/WindroseServer-Win64-Shipping.exe"
 SERVER_DESCRIPTION="$SERVER_DIR/R5/ServerDescription.json"
@@ -75,16 +80,27 @@ find_world_description() {
   fi
 
   local world_id
-  world_id="$(jq -r '.ServerDescription_Persistent.WorldID // empty' "$SERVER_DESCRIPTION" 2>/dev/null || true)"
+  world_id="$(jq -r '.ServerDescription_Persistent.WorldIslandId // .ServerDescription_Persistent.WorldID // empty' "$SERVER_DESCRIPTION" 2>/dev/null || true)"
+  local found
   if [ -n "$world_id" ]; then
-    local path="$SERVER_DIR/R5/Saved/SaveGames/Worlds/$world_id/WorldDescription.json"
-    if [ -f "$path" ]; then
-      printf '%s\n' "$path"
+    found="$(find "$SERVER_DIR/R5/Saved/SaveProfiles/Default/RocksDB" \
+      -path "*/Worlds/$world_id/WorldDescription.json" \
+      -print -quit 2>/dev/null || true)"
+    if [ -n "$found" ]; then
+      printf '%s\n' "$found"
       return 0
     fi
   fi
 
-  find "$SERVER_DIR/R5/Saved/SaveGames/Worlds" -name WorldDescription.json -print -quit 2>/dev/null
+  found="$(find "$SERVER_DIR/R5/Saved/SaveProfiles/Default/RocksDB" \
+    -path "*/Worlds/*/WorldDescription.json" \
+    -print -quit 2>/dev/null || true)"
+  if [ -n "$found" ]; then
+    printf '%s\n' "$found"
+    return 0
+  fi
+
+  return 1
 }
 
 generate_initial_config() {
@@ -124,25 +140,41 @@ generate_initial_config() {
 patch_settings() {
   local direct_json=false
   local port_json=-1
+  local password_protected_json=false
+  local invite_log="preserve"
   if is_truthy "$USE_DIRECT_CONNECTION"; then
     direct_json=true
     port_json="$SERVER_PORT"
   fi
+  if [ -n "$SERVER_PASSWORD" ]; then
+    password_protected_json=true
+  fi
+  if [ -n "$SERVER_INVITE_CODE" ]; then
+    invite_log="custom"
+  fi
 
-  log "Applying server settings: name=$SERVER_NAME max_players=$MAX_PLAYERS direct=$direct_json"
+  log "Applying server settings: name=$SERVER_NAME max_players=$MAX_PLAYERS direct=$direct_json password_protected=$password_protected_json invite=$invite_log"
   local tmp
   tmp="$(mktemp)"
   jq \
     --arg server_name "$SERVER_NAME" \
     --arg password "$SERVER_PASSWORD" \
+    --arg invite_code "$SERVER_INVITE_CODE" \
     --arg region "$USER_SELECTED_REGION" \
     --arg p2p_proxy "$P2P_PROXY_ADDRESS" \
     --arg direct_proxy "$DIRECT_CONNECTION_PROXY_ADDRESS" \
     --argjson max_players "$MAX_PLAYERS" \
+    --argjson password_protected "$password_protected_json" \
     --argjson direct "$direct_json" \
     --argjson direct_port "$port_json" \
     '
+      if ($invite_code | length) > 0 then
+        .ServerDescription_Persistent.InviteCode = $invite_code
+      else
+        .
+      end |
       .ServerDescription_Persistent.ServerName = $server_name |
+      .ServerDescription_Persistent.IsPasswordProtected = $password_protected |
       .ServerDescription_Persistent.Password = $password |
       .ServerDescription_Persistent.UserSelectedRegion = $region |
       .ServerDescription_Persistent.P2pProxyAddress = $p2p_proxy |
@@ -157,7 +189,7 @@ patch_settings() {
   world_description="$(find_world_description || true)"
   if [ -n "$world_description" ]; then
     tmp="$(mktemp)"
-    jq --arg world_name "$SERVER_NAME" '.WorldDescription_Persistent.WorldName = $world_name' "$world_description" > "$tmp"
+    jq --arg world_name "$SERVER_NAME" '.WorldDescription.WorldName = $world_name' "$world_description" > "$tmp"
     mv "$tmp" "$world_description"
   fi
 }
@@ -177,4 +209,3 @@ patch_settings
 
 log "Starting Windrose dedicated server"
 exec xvfb-run -a wine "$SERVER_EXEC" -log -unattended -nullrhi $EXTRA_ARGS
-

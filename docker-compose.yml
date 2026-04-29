@@ -5,6 +5,7 @@ services:
     build:
       context: .
     platform: linux/arm64
+    network_mode: host
     restart: unless-stopped
     stop_grace_period: 30s
     env_file:
@@ -12,7 +13,5 @@ services:
     volumes:
       - ./data/server:/server
       - ./data/wine:/home/steam/.wine
-    # Direct IP mode is experimental on ARM64. Leave these disabled for invite-code mode.
-    # ports:
-    #   - "7777:7777/tcp"
-    #   - "7777:7777/udp"
+    # Host networking avoids Docker bridge NAT interfering with Windrose ICE/P2P.
+    # For Direct IP mode, open SERVER_PORT in the host and cloud firewall.
