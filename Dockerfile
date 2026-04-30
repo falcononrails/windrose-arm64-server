@@ -1,6 +1,7 @@
 FROM --platform=linux/arm64 ghcr.io/sonroyaalmerol/steamcmd-arm64:root-bookworm
 
 ARG HANGOVER_VERSION=11.4
+ARG POWERSHELL_VERSION=7.6.1
 
 LABEL org.opencontainers.image.title="Windrose ARM64 Server" \
       org.opencontainers.image.description="Windrose dedicated server container for ARM64 hosts using SteamCMD and Hangover" \
@@ -27,9 +28,17 @@ RUN apt-get update \
         procps \
         psmisc \
         tar \
+        unzip \
         winbind \
         xauth \
         xvfb \
+    && mkdir -p /opt/microsoft/powershell/7 \
+    && curl -fsSL -o /tmp/powershell.tar.gz \
+        "https://github.com/PowerShell/PowerShell/releases/download/v${POWERSHELL_VERSION}/powershell-${POWERSHELL_VERSION}-linux-arm64.tar.gz" \
+    && tar -xzf /tmp/powershell.tar.gz -C /opt/microsoft/powershell/7 \
+    && chmod 0755 /opt/microsoft/powershell/7/pwsh \
+    && ln -s /opt/microsoft/powershell/7/pwsh /usr/local/bin/pwsh \
+    && rm -f /tmp/powershell.tar.gz \
     && curl -fsSL -o /tmp/hangover.tar \
         "https://github.com/AndreRH/hangover/releases/download/hangover-${HANGOVER_VERSION}/hangover_${HANGOVER_VERSION}_debian12_bookworm_arm64.tar" \
     && mkdir -p /tmp/hangover \
@@ -45,8 +54,9 @@ RUN apt-get update \
 COPY scripts/windrose-entrypoint.sh /usr/local/bin/windrose-entrypoint
 COPY scripts/windrose-run.sh /usr/local/bin/windrose-run
 COPY scripts/windrose-healthcheck.sh /usr/local/bin/windrose-healthcheck
+COPY scripts/windrose-plus.sh /usr/local/lib/windrose-plus.sh
 
-RUN chmod 0755 /usr/local/bin/windrose-entrypoint /usr/local/bin/windrose-run /usr/local/bin/windrose-healthcheck
+RUN chmod 0755 /usr/local/bin/windrose-entrypoint /usr/local/bin/windrose-run /usr/local/bin/windrose-healthcheck /usr/local/lib/windrose-plus.sh
 
 VOLUME ["/server", "/home/steam/.wine"]
 WORKDIR /server
