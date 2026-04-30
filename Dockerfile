@@ -9,9 +9,11 @@ LABEL org.opencontainers.image.title="Windrose ARM64 Server" \
 
 ENV DEBIAN_FRONTEND=noninteractive \
     SERVER_DIR=/server \
+    HOME=/home/steam \
     WINEPREFIX=/home/steam/.wine \
     WINEDEBUG=-all \
     HODLL64=libarm64ecfex.dll \
+    WINEDLLOVERRIDES=mscoree,mshtml=;dwmapi=n,b;version=n,b \
     WINDROSE_APP_ID=4129620 \
     TZ=UTC
 
@@ -42,14 +44,15 @@ RUN apt-get update \
 
 COPY scripts/windrose-entrypoint.sh /usr/local/bin/windrose-entrypoint
 COPY scripts/windrose-run.sh /usr/local/bin/windrose-run
+COPY scripts/windrose-healthcheck.sh /usr/local/bin/windrose-healthcheck
 
-RUN chmod 0755 /usr/local/bin/windrose-entrypoint /usr/local/bin/windrose-run
+RUN chmod 0755 /usr/local/bin/windrose-entrypoint /usr/local/bin/windrose-run /usr/local/bin/windrose-healthcheck
 
 VOLUME ["/server", "/home/steam/.wine"]
 WORKDIR /server
 
 STOPSIGNAL SIGTERM
-HEALTHCHECK --interval=60s --timeout=10s --start-period=10m --retries=3 \
-    CMD pgrep -f WindroseServer-Win64-Shipping.exe >/dev/null || exit 1
+HEALTHCHECK --interval=60s --timeout=10s --start-period=20m --retries=3 \
+    CMD windrose-healthcheck
 
 ENTRYPOINT ["windrose-entrypoint"]

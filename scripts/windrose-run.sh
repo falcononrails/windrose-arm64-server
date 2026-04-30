@@ -42,6 +42,8 @@ EXTRA_ARGS="${EXTRA_ARGS:-}"
 export WINEPREFIX
 export WINEDEBUG="${WINEDEBUG:--all}"
 export HODLL64="${HODLL64:-libarm64ecfex.dll}"
+export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=;dwmapi=n,b;version=n,b}"
+export HOME="${HOME:-/home/steam}"
 
 require_number "MAX_PLAYERS" "$MAX_PLAYERS"
 require_number "SERVER_PORT" "$SERVER_PORT"
@@ -53,15 +55,54 @@ fi
 
 SERVER_EXEC="$SERVER_DIR/R5/Binaries/Win64/WindroseServer-Win64-Shipping.exe"
 SERVER_DESCRIPTION="$SERVER_DIR/R5/ServerDescription.json"
+SERVER_LOG="$SERVER_DIR/R5/Saved/Logs/R5.log"
 
-update_server() {
-  log "Installing or updating Windrose dedicated server with SteamCMD"
+windrose_process_running() {
+  local proc cmdline
+  for proc in /proc/[0-9]*; do
+    cmdline="$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)"
+    case "$cmdline" in
+      "$SERVER_EXEC"|"$SERVER_EXEC "*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+update_server_once() {
   "$STEAMCMD" \
     +@sSteamCmdForcePlatformType windows \
     +force_install_dir "$SERVER_DIR" \
     +login anonymous \
     +app_update "$WINDROSE_APP_ID" validate \
     +quit
+}
+
+update_server() {
+  local attempt status
+  for attempt in 1 2 3; do
+    log "Installing or updating Windrose dedicated server with SteamCMD (attempt $attempt/3)"
+    set +e
+    update_server_once
+    status=$?
+    set -e
+
+    if [ "$status" -eq 0 ] && [ -x "$SERVER_EXEC" ]; then
+      return 0
+    fi
+
+    if [ -x "$SERVER_EXEC" ]; then
+      log "SteamCMD returned status $status, continuing with the existing server install"
+      return 0
+    fi
+
+    if [ "$attempt" -lt 3 ]; then
+      log "SteamCMD did not leave a runnable server executable yet; retrying"
+      sleep 5
+    fi
+  done
+
+  log "SteamCMD did not install $SERVER_EXEC"
+  return 66
 }
 
 init_wine_prefix() {
@@ -124,12 +165,15 @@ generate_initial_config() {
   done
 
   if kill -0 "$boot_pid" >/dev/null 2>&1; then
+    pkill -TERM -P "$boot_pid" >/dev/null 2>&1 || true
     kill -TERM "$boot_pid" >/dev/null 2>&1 || true
     sleep 3
+    pkill -KILL -P "$boot_pid" >/dev/null 2>&1 || true
     kill -KILL "$boot_pid" >/dev/null 2>&1 || true
   fi
   wait "$boot_pid" >/dev/null 2>&1 || true
   wineserver -k >/dev/null 2>&1 || true
+  pkill -x Xvfb >/dev/null 2>&1 || true
 
   if [ ! -f "$SERVER_DESCRIPTION" ]; then
     log "Windrose did not create $SERVER_DESCRIPTION within ${CONFIG_BOOT_TIMEOUT}s"
@@ -194,6 +238,65 @@ patch_settings() {
   fi
 }
 
+start_server_foreground() {
+  local run_pid tail_pid status saw_process=0 deadline
+  deadline=$((SECONDS + 180))
+
+  mkdir -p "$(dirname "$SERVER_LOG")"
+  touch "$SERVER_LOG" || true
+
+  tail -n 0 -F "$SERVER_LOG" &
+  tail_pid=$!
+
+  set +e
+  xvfb-run -a wine "$SERVER_EXEC" -log -unattended -nullrhi $EXTRA_ARGS &
+  run_pid=$!
+  set -e
+
+  stop_server() {
+    log "Stopping Windrose dedicated server"
+    kill -TERM "$run_pid" >/dev/null 2>&1 || true
+    pkill -TERM -P "$run_pid" >/dev/null 2>&1 || true
+    sleep 3
+    kill -KILL "$run_pid" >/dev/null 2>&1 || true
+    pkill -KILL -P "$run_pid" >/dev/null 2>&1 || true
+    kill "$tail_pid" >/dev/null 2>&1 || true
+    wineserver -k >/dev/null 2>&1 || true
+    pkill -x Xvfb >/dev/null 2>&1 || true
+  }
+
+  trap 'stop_server; exit 143' TERM INT
+
+  while kill -0 "$run_pid" >/dev/null 2>&1; do
+    if windrose_process_running; then
+      saw_process=1
+    elif [ "$saw_process" -eq 1 ]; then
+      log "Windrose process exited while the wrapper was still running"
+      stop_server
+      wait "$run_pid" >/dev/null 2>&1 || true
+      return 1
+    elif [ "$SECONDS" -ge "$deadline" ]; then
+      log "Windrose process did not become visible within 180 seconds"
+      stop_server
+      wait "$run_pid" >/dev/null 2>&1 || true
+      return 1
+    fi
+    sleep 5
+  done
+
+  set +e
+  wait "$run_pid"
+  status=$?
+  set -e
+
+  trap - TERM INT
+  kill "$tail_pid" >/dev/null 2>&1 || true
+  wineserver -k >/dev/null 2>&1 || true
+  pkill -x Xvfb >/dev/null 2>&1 || true
+
+  return "$status"
+}
+
 if [ ! -x "$SERVER_EXEC" ] || is_truthy "$UPDATE_ON_START"; then
   update_server
 fi
@@ -208,4 +311,4 @@ generate_initial_config
 patch_settings
 
 log "Starting Windrose dedicated server"
-exec xvfb-run -a wine "$SERVER_EXEC" -log -unattended -nullrhi $EXTRA_ARGS
+start_server_foreground

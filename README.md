@@ -218,6 +218,14 @@ Show logs:
 docker compose logs -f windrose
 ```
 
+The final Windrose app log is also stored inside the persisted server volume:
+
+```bash
+docker compose exec windrose tail -n 200 /server/R5/Saved/Logs/R5.log
+```
+
+During first Wine/Hangover setup you may see `wine: failed to start L"C:\\windows\\sysarm32\\rundll32.exe": c0000135`. That line is expected on this ARM64 stack if the server continues booting and reaches registration in the logs.
+
 Check whether the Windrose process is running:
 
 ```bash
