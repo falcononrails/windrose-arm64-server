@@ -138,10 +138,10 @@ Available environment variables:
 | `PUID` | `1000` | UID used for persisted files |
 | `PGID` | `1000` | GID used for persisted files |
 
-Changing server settings requires a container restart:
+After changing `.env`, recreate the container so Docker loads the new environment:
 
 ```bash
-docker compose restart windrose
+docker compose up -d --force-recreate
 ```
 
 The invite code is stored in the generated Windrose settings. Normal restarts should keep it because `/server` is persisted.
@@ -152,7 +152,13 @@ If the Windrose matchmaking service stops resolving an old invite code after a c
 SERVER_INVITE_CODE=mynewcode1
 ```
 
-Then restart the container and use the new code. The value must be at least 6 alphanumeric characters. Keep it empty for the normal generated-code behavior.
+Then recreate the container and use the new code. The value must be at least 6 alphanumeric characters. Keep it empty for the normal generated-code behavior.
+
+To verify password settings without printing the password:
+
+```bash
+docker compose exec windrose jq '.ServerDescription_Persistent | {InviteCode, IsPasswordProtected, PasswordLength:(.Password // "" | length)}' /server/R5/ServerDescription.json
+```
 
 ## Direct IP Mode
 
