@@ -96,6 +96,18 @@ WINDROSE_PLUS_BIND_IP="${WINDROSE_PLUS_BIND_IP:-0.0.0.0}"
 WINDROSE_PLUS_DASHBOARD="${WINDROSE_PLUS_DASHBOARD:-true}"
 WINDROSE_PLUS_BUILD_PAK="${WINDROSE_PLUS_BUILD_PAK:-false}"
 
+ENABLE_PANEL="${ENABLE_PANEL:-false}"
+PANEL_HOST="${PANEL_HOST:-0.0.0.0}"
+PANEL_PORT="${PANEL_PORT:-8790}"
+PANEL_PASSWORD="${PANEL_PASSWORD:-}"
+PANEL_SECRET="${PANEL_SECRET:-}"
+WINDROSE_VERSION_DIR="${WINDROSE_VERSION_DIR:-/versions}"
+WINDROSE_CONTROL_DIR="${WINDROSE_CONTROL_DIR:-$SERVER_DIR/windrose_panel_data}"
+WINDROSE_VERSION_PIN_FILE="${WINDROSE_VERSION_PIN_FILE:-$WINDROSE_VERSION_DIR/version-pin.json}"
+WINDROSE_UPDATE_LOG="${WINDROSE_UPDATE_LOG:-$WINDROSE_CONTROL_DIR/update.log}"
+WINDROSE_ROLLBACK_LOG="${WINDROSE_ROLLBACK_LOG:-$WINDROSE_CONTROL_DIR/rollback.log}"
+WINDROSE_STEAM_LATEST_CACHE="${WINDROSE_STEAM_LATEST_CACHE:-$WINDROSE_VERSION_DIR/steam-latest.json}"
+
 export WINEPREFIX
 export WINEDEBUG="${WINEDEBUG:--all}"
 export HODLL64="${HODLL64:-libarm64ecfex.dll}"
@@ -105,6 +117,7 @@ export HOME="${HOME:-/home/steam}"
 require_number "MAX_PLAYERS" "$MAX_PLAYERS"
 require_number "SERVER_PORT" "$SERVER_PORT"
 require_number "CONFIG_BOOT_TIMEOUT" "$CONFIG_BOOT_TIMEOUT"
+require_number "PANEL_PORT" "$PANEL_PORT"
 [ -z "$MOB_HEALTH_MULTIPLIER" ] || require_float "MOB_HEALTH_MULTIPLIER" "$MOB_HEALTH_MULTIPLIER"
 [ -z "$MOB_DAMAGE_MULTIPLIER" ] || require_float "MOB_DAMAGE_MULTIPLIER" "$MOB_DAMAGE_MULTIPLIER"
 [ -z "$SHIP_HEALTH_MULTIPLIER" ] || require_float "SHIP_HEALTH_MULTIPLIER" "$SHIP_HEALTH_MULTIPLIER"
@@ -129,16 +142,73 @@ SERVER_LOG="$SERVER_DIR/R5/Saved/Logs/R5.log"
 # shellcheck source=/usr/local/lib/windrose-plus.sh
 . /usr/local/lib/windrose-plus.sh
 
+ensure_version_dir_not_nested() {
+  local server_real version_real
+  server_real="$(realpath -m "$SERVER_DIR")"
+  version_real="$(realpath -m "$WINDROSE_VERSION_DIR")"
+  case "$version_real" in
+    "$server_real"|"$server_real"/*)
+      log "WINDROSE_VERSION_DIR must not be inside SERVER_DIR. Got WINDROSE_VERSION_DIR=$WINDROSE_VERSION_DIR SERVER_DIR=$SERVER_DIR"
+      exit 64
+      ;;
+  esac
+}
+
 windrose_process_running() {
   local proc cmdline
   for proc in /proc/[0-9]*; do
     [ -r "$proc/cmdline" ] || continue
     cmdline="$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)"
     case "$cmdline" in
-      "$SERVER_EXEC"|"$SERVER_EXEC "*) return 0 ;;
+      *"WindroseServer-Win64-Shipping.exe"*) return 0 ;;
     esac
   done
   return 1
+}
+
+manifest_build() {
+  local manifest="$SERVER_DIR/steamapps/appmanifest_${WINDROSE_APP_ID}.acf"
+  [ -f "$manifest" ] || return 0
+  awk -F'"' '/"buildid"/{print $4; exit}' "$manifest" 2>/dev/null || true
+}
+
+version_pin_target() {
+  if [ -f "$WINDROSE_VERSION_PIN_FILE" ]; then
+    sed -n 's/.*"target_build"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$WINDROSE_VERSION_PIN_FILE" | head -1
+  else
+    printf 'latest\n'
+  fi
+}
+
+snapshot_build_for_path() {
+  local path="$1"
+  local manifest="$path/steamapps/appmanifest_${WINDROSE_APP_ID}.acf"
+  [ -f "$manifest" ] || return 0
+  awk -F'"' '/"buildid"/{print $4; exit}' "$manifest" 2>/dev/null || true
+}
+
+snapshot_exists_for_build() {
+  local build="$1" candidate
+  [ -n "$build" ] || return 1
+  [ -d "$WINDROSE_VERSION_DIR" ] || return 1
+  while IFS= read -r -d '' candidate; do
+    [ "$(snapshot_build_for_path "$candidate")" = "$build" ] && return 0
+  done < <(find "$WINDROSE_VERSION_DIR" -maxdepth 1 -type d \( -name 'server-before-update-*' -o -name 'server-before-rollback-*' -o -name 'server-snapshot-*' \) -print0 2>/dev/null)
+  return 1
+}
+
+snapshot_current_if_missing() {
+  local build="$1" target stamp
+  [ -n "$build" ] && [ "$build" != "unknown" ] || return 0
+  mkdir -p "$WINDROSE_VERSION_DIR"
+  if snapshot_exists_for_build "$build"; then
+    log "Saved install already exists for Steam build $build"
+    return 0
+  fi
+  stamp="$(date -u +%Y%m%d_%H%M%S)"
+  target="$WINDROSE_VERSION_DIR/server-snapshot-pre-update-${build}-${stamp}"
+  log "Saving current install before update: $target"
+  cp -a "$SERVER_DIR" "$target"
 }
 
 update_server_once() {
@@ -152,6 +222,16 @@ update_server_once() {
 
 update_server() {
   local attempt status
+  local pin_target current_build
+  pin_target="$(version_pin_target)"
+  if [ "$pin_target" != "latest" ] && [ -x "$SERVER_EXEC" ]; then
+    log "Steam update skipped because server is pinned to build $pin_target"
+    return 0
+  fi
+
+  current_build="$(manifest_build)"
+  snapshot_current_if_missing "${current_build:-unknown}"
+
   for attempt in 1 2 3; do
     log "Installing or updating Windrose dedicated server with SteamCMD (attempt $attempt/3)"
     set +e
@@ -378,6 +458,97 @@ patch_world_settings() {
   mv "$tmp" "$world_description"
 }
 
+generated_secret() {
+  local secret_file="$1"
+  local length="${2:-32}"
+  if [ -f "$secret_file" ]; then
+    cat "$secret_file"
+    return
+  fi
+
+  local secret
+  set +o pipefail
+  secret="$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "$length")"
+  set -o pipefail
+  printf '%s\n' "$secret" > "$secret_file"
+  chmod 0600 "$secret_file" 2>/dev/null || true
+  printf '%s\n' "$secret"
+}
+
+start_panel() {
+  PANEL_PID=""
+  if ! is_truthy "$ENABLE_PANEL"; then
+    return 0
+  fi
+
+  mkdir -p "$WINDROSE_CONTROL_DIR" "$WINDROSE_VERSION_DIR"
+  if [ -z "$PANEL_PASSWORD" ]; then
+    PANEL_PASSWORD="$(generated_secret "$SERVER_DIR/.windrose_panel_password" 32)"
+    log "Generated panel password at $SERVER_DIR/.windrose_panel_password"
+  fi
+  if [ -z "$PANEL_SECRET" ]; then
+    PANEL_SECRET="$(generated_secret "$SERVER_DIR/.windrose_panel_secret" 48)"
+  fi
+
+  export PANEL_HOST PANEL_PORT PANEL_PASSWORD PANEL_SECRET
+  export WINDROSE_GAME_DIR="$SERVER_DIR"
+  export WINDROSE_BACKUP_DIR="$SERVER_DIR/backups"
+  export WINDROSE_PANEL_MODE=container
+  export WINDROSE_CONTROL_DIR
+  export WINDROSE_INSTALL_PARENT="$WINDROSE_VERSION_DIR"
+  export WINDROSE_VERSION_PIN_FILE
+  export WINDROSE_UPDATE_LOG
+  export WINDROSE_ROLLBACK_LOG
+  export WINDROSE_STEAM_LATEST_CACHE
+  export SOURCE_RCON_HOST="${SOURCE_RCON_HOST:-127.0.0.1}"
+  export SOURCE_RCON_PORT="${SOURCE_RCON_PORT:-27065}"
+
+  log "Starting Windrose panel on ${PANEL_HOST}:${PANEL_PORT}"
+  python3 /opt/windrose-panel/windrose_panel.py > "$WINDROSE_CONTROL_DIR/panel.log" 2>&1 &
+  PANEL_PID=$!
+}
+
+stop_panel() {
+  if [ -n "${PANEL_PID:-}" ]; then
+    kill -TERM "$PANEL_PID" >/dev/null 2>&1 || true
+    wait "$PANEL_PID" >/dev/null 2>&1 || true
+    PANEL_PID=""
+  fi
+}
+
+read_control_action() {
+  local command_file="$WINDROSE_CONTROL_DIR/command.json"
+  [ -f "$command_file" ] || return 1
+  jq -r '.action // empty' "$command_file" 2>/dev/null || true
+}
+
+clear_control_action() {
+  rm -f "$WINDROSE_CONTROL_DIR/command.json"
+}
+
+write_runtime_state() {
+  local state="$1"
+  mkdir -p "$WINDROSE_CONTROL_DIR"
+  jq -n --arg state "$state" --argjson ts "$(date -u +%s)" '{state:$state,timestamp:$ts}' > "$WINDROSE_CONTROL_DIR/runtime_state.json"
+}
+
+wait_while_stopped() {
+  local action
+  write_runtime_state "stopped"
+  log "Windrose server is stopped; panel remains available"
+  while true; do
+    action="$(read_control_action || true)"
+    case "$action" in
+      start|restart)
+        clear_control_action
+        write_runtime_state "starting"
+        return 0
+        ;;
+    esac
+    sleep 2
+  done
+}
+
 start_server_foreground() {
   local run_pid tail_pid status saw_process=0 deadline
   deadline=$((SECONDS + 180))
@@ -409,6 +580,25 @@ start_server_foreground() {
   trap 'stop_server; exit 143' TERM INT
 
   while kill -0 "$run_pid" >/dev/null 2>&1; do
+    local action
+    action="$(read_control_action || true)"
+    case "$action" in
+      restart)
+        log "Restart requested by panel"
+        clear_control_action
+        stop_server
+        wait "$run_pid" >/dev/null 2>&1 || true
+        return 75
+        ;;
+      stop)
+        log "Stop requested by panel"
+        clear_control_action
+        stop_server
+        wait "$run_pid" >/dev/null 2>&1 || true
+        return 76
+        ;;
+    esac
+
     if windrose_process_running; then
       saw_process=1
     elif [ "$saw_process" -eq 1 ]; then
@@ -439,28 +629,65 @@ start_server_foreground() {
   return "$status"
 }
 
-if [ ! -x "$SERVER_EXEC" ] || is_truthy "$UPDATE_ON_START"; then
-  update_server
-fi
+prepare_server() {
+  if [ ! -x "$SERVER_EXEC" ] || is_truthy "$UPDATE_ON_START"; then
+    update_server
+  fi
 
-if [ ! -x "$SERVER_EXEC" ]; then
-  log "Windrose server executable was not found at $SERVER_EXEC"
-  exit 66
-fi
+  if [ ! -x "$SERVER_EXEC" ]; then
+    log "Windrose server executable was not found at $SERVER_EXEC"
+    exit 66
+  fi
 
-init_wine_prefix
-generate_initial_config
-patch_settings
-patch_world_settings
+  init_wine_prefix
+  generate_initial_config
+  patch_settings
+  patch_world_settings
 
-if is_truthy "$ENABLE_WINDROSE_PLUS"; then
-  install_windrose_plus_files "$SERVER_DIR" "$WINDROSE_PLUS_VERSION"
-  patch_windrose_plus_config "$SERVER_DIR"
-  run_windrose_plus_pak_builder
-else
-  disable_managed_windrose_plus "$SERVER_DIR"
-fi
+  if is_truthy "$ENABLE_WINDROSE_PLUS"; then
+    install_windrose_plus_files "$SERVER_DIR" "$WINDROSE_PLUS_VERSION"
+    patch_windrose_plus_config "$SERVER_DIR"
+    run_windrose_plus_pak_builder
+  else
+    disable_managed_windrose_plus "$SERVER_DIR"
+  fi
+}
 
-log "Starting Windrose dedicated server"
-start_windrose_plus_dashboard
-start_server_foreground
+shutdown_all() {
+  stop_windrose_plus_dashboard || true
+  stop_panel || true
+}
+
+trap 'shutdown_all; exit 143' TERM INT
+
+ensure_version_dir_not_nested
+mkdir -p "$WINDROSE_CONTROL_DIR" "$WINDROSE_VERSION_DIR"
+clear_control_action
+start_panel
+
+while true; do
+  prepare_server
+  log "Starting Windrose dedicated server"
+  write_runtime_state "running"
+  start_windrose_plus_dashboard
+  set +e
+  start_server_foreground
+  status=$?
+  set -e
+  trap 'shutdown_all; exit 143' TERM INT
+
+  case "$status" in
+    75)
+      write_runtime_state "restarting"
+      continue
+      ;;
+    76)
+      wait_while_stopped
+      continue
+      ;;
+    *)
+      shutdown_all
+      exit "$status"
+      ;;
+  esac
+done

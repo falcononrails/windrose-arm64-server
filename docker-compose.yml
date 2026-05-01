@@ -12,6 +12,7 @@ services:
       - .env
     volumes:
       - ./data/server:/server
+      - ./data/versions:/versions
       - ./data/wine:/home/steam/.wine
     # Host networking avoids Docker bridge NAT interfering with Windrose ICE/P2P.
     # For Direct IP mode, open SERVER_PORT in the host and cloud firewall.

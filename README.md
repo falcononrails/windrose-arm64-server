@@ -11,6 +11,7 @@ This image uses:
 
 - [`sonroyaalmerol/steamcmd-arm64`](https://github.com/sonroyaalmerol/steamcmd-arm64) for SteamCMD on ARM64
 - [`AndreRH/hangover`](https://github.com/AndreRH/hangover) to run the Windows dedicated server binary through Wine/Hangover
+- an optional bundled web panel for status, logs, backups, config edits, and version switching
 - Windrose dedicated server Steam app id `4129620`
 
 This project is community maintained and is not affiliated with Windrose, Valve, Oracle, or the upstream projects above.
@@ -68,6 +69,7 @@ services:
       - .env
     volumes:
       - ./data/server:/server
+      - ./data/versions:/versions
       - ./data/wine:/home/steam/.wine
 ```
 
@@ -86,6 +88,7 @@ docker run -d \
   --platform linux/arm64 \
   --env-file .env \
   -v ./data/server:/server \
+  -v ./data/versions:/versions \
   -v ./data/wine:/home/steam/.wine \
   ghcr.io/falcononrails/windrose-arm64-server:latest
 ```
@@ -119,6 +122,7 @@ COMBAT_DIFFICULTY=Normal
 UPDATE_ON_START=true
 USE_DIRECT_CONNECTION=false
 ENABLE_WINDROSE_PLUS=false
+ENABLE_PANEL=false
 ```
 
 Available environment variables:
@@ -153,6 +157,12 @@ Available environment variables:
 | `WINDROSE_PLUS_BIND_IP` | `0.0.0.0` | Windrose+ dashboard bind IP |
 | `WINDROSE_PLUS_DASHBOARD` | `true` | Start the Windrose+ dashboard when Windrose+ is enabled |
 | `WINDROSE_PLUS_BUILD_PAK` | `false` | Experimental: run the Windrose+ PAK builder before launch |
+| `ENABLE_PANEL` | `false` | Start the bundled Windrose web panel |
+| `PANEL_HOST` | `0.0.0.0` | Panel bind IP |
+| `PANEL_PORT` | `8790` | Panel HTTP port |
+| `PANEL_PASSWORD` | empty | Optional panel login password. If empty, one is generated and persisted in `/server/.windrose_panel_password`. |
+| `PANEL_SECRET` | empty | Optional session signing secret. If empty, one is generated and persisted in `/server/.windrose_panel_secret`. |
+| `WINDROSE_VERSION_DIR` | `/versions` | Persisted install snapshot directory used by the panel for version switching. Keep this outside `/server`. |
 | `CONFIG_BOOT_TIMEOUT` | `420` | Seconds to wait for first-run config generation |
 | `EXTRA_ARGS` | empty | Extra arguments passed to the server executable |
 | `TZ` | `UTC` | Container timezone |
@@ -229,6 +239,41 @@ docker compose exec windrose tail -n 100 /server/windrose_plus_data/dashboard.lo
 Windrose+ multiplier and advanced `.ini` PAK rebuilding is still experimental on this ARM64 image. Runtime features that do not need PAK rebuilding, including status/query data and dashboard RCON commands, are the intended first use case.
 
 If you later set `ENABLE_WINDROSE_PLUS=false`, the container disables the managed UE4SS proxy DLL in the persisted `/server` volume on the next recreate.
+
+## Bundled Panel
+
+The image can run the community control panel inside the same container. Enable both Windrose+ and the panel for the best status and player data:
+
+```env
+ENABLE_WINDROSE_PLUS=true
+ENABLE_PANEL=true
+PANEL_PORT=8790
+```
+
+Then recreate the container and open:
+
+```text
+http://YOUR_SERVER_IP:8790
+```
+
+If `PANEL_PASSWORD` is empty, the container generates one on first start:
+
+```bash
+docker compose exec windrose cat /server/.windrose_panel_password
+```
+
+The panel can:
+
+- show host CPU, memory, disk, and Windrose process usage
+- start, stop, restart, and back up the server
+- edit basic server config such as name, password, and max players
+- show logs from the container, Windrose+, and the game log
+- list the current Steam build and saved local builds
+- switch to a saved build and pin auto-update until you resume latest
+
+Saved install snapshots live in `./data/versions`. Save data and generated server settings remain in `./data/server`. The panel refuses to use a version directory inside `/server` to avoid recursive snapshots.
+
+The panel is password protected, but it can restart the game server and edit config. If you expose it publicly, restrict access with your cloud firewall or put it behind a VPN/reverse proxy.
 
 ## Direct IP Mode
 

@@ -4,7 +4,7 @@ ARG HANGOVER_VERSION=11.4
 ARG POWERSHELL_VERSION=7.6.1
 
 LABEL org.opencontainers.image.title="Windrose ARM64 Server" \
-      org.opencontainers.image.description="Windrose dedicated server container for ARM64 hosts using SteamCMD and Hangover" \
+      org.opencontainers.image.description="Windrose dedicated server container for ARM64 hosts using SteamCMD, Hangover, Windrose+, and an optional control panel" \
       org.opencontainers.image.source="https://github.com/falcononrails/windrose-arm64-server" \
       org.opencontainers.image.licenses="MIT"
 
@@ -27,6 +27,7 @@ RUN apt-get update \
         jq \
         procps \
         psmisc \
+        python3 \
         tar \
         unzip \
         winbind \
@@ -49,16 +50,25 @@ RUN apt-get update \
         /tmp/hangover/hangover-libwow64fex_*.deb \
         /tmp/hangover/hangover-wowbox64_*.deb \
     && rm -rf /var/lib/apt/lists/* /tmp/hangover /tmp/hangover.tar \
-    && install -d -o steam -g steam /server /home/steam/.wine
+    && install -d -o steam -g steam /server /versions /home/steam/.wine
 
 COPY scripts/windrose-entrypoint.sh /usr/local/bin/windrose-entrypoint
 COPY scripts/windrose-run.sh /usr/local/bin/windrose-run
 COPY scripts/windrose-healthcheck.sh /usr/local/bin/windrose-healthcheck
+COPY scripts/windrose-latest-build.sh /usr/local/bin/windrose-latest-build
 COPY scripts/windrose-plus.sh /usr/local/lib/windrose-plus.sh
+COPY panel/windrose_panel.py /opt/windrose-panel/windrose_panel.py
+COPY panel/README.md /opt/windrose-panel/README.md
 
-RUN chmod 0755 /usr/local/bin/windrose-entrypoint /usr/local/bin/windrose-run /usr/local/bin/windrose-healthcheck /usr/local/lib/windrose-plus.sh
+RUN chmod 0755 \
+        /usr/local/bin/windrose-entrypoint \
+        /usr/local/bin/windrose-run \
+        /usr/local/bin/windrose-healthcheck \
+        /usr/local/bin/windrose-latest-build \
+        /usr/local/lib/windrose-plus.sh \
+    && chmod 0644 /opt/windrose-panel/windrose_panel.py /opt/windrose-panel/README.md
 
-VOLUME ["/server", "/home/steam/.wine"]
+VOLUME ["/server", "/versions", "/home/steam/.wine"]
 WORKDIR /server
 
 STOPSIGNAL SIGTERM

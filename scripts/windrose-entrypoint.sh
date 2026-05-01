@@ -3,6 +3,7 @@ set -euo pipefail
 
 SERVER_DIR="${SERVER_DIR:-/server}"
 WINEPREFIX="${WINEPREFIX:-/home/steam/.wine}"
+WINDROSE_VERSION_DIR="${WINDROSE_VERSION_DIR:-/versions}"
 PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
 
@@ -24,8 +25,7 @@ if id steam >/dev/null 2>&1; then
   fi
 fi
 
-install -d -m 0755 -o steam -g steam "$SERVER_DIR" "$WINEPREFIX" /home/steam
-chown -R steam:steam "$SERVER_DIR" "$WINEPREFIX" /home/steam
+install -d -m 0755 -o steam -g steam "$SERVER_DIR" "$WINEPREFIX" "$WINDROSE_VERSION_DIR" /home/steam
+chown -R steam:steam "$SERVER_DIR" "$WINEPREFIX" "$WINDROSE_VERSION_DIR" /home/steam
 
 exec gosu steam windrose-run
-
