@@ -74,6 +74,9 @@ SERVER_PORT="${SERVER_PORT:-7777}"
 DIRECT_CONNECTION_PROXY_ADDRESS="${DIRECT_CONNECTION_PROXY_ADDRESS:-0.0.0.0}"
 P2P_PROXY_ADDRESS="${P2P_PROXY_ADDRESS:-127.0.0.1}"
 CONFIG_BOOT_TIMEOUT="${CONFIG_BOOT_TIMEOUT:-420}"
+SERVER_CRASH_RESTART_ATTEMPTS="${SERVER_CRASH_RESTART_ATTEMPTS:-3}"
+SERVER_CRASH_RESTART_DELAY="${SERVER_CRASH_RESTART_DELAY:-45}"
+SERVER_CRASH_RESTART_RESET_AFTER="${SERVER_CRASH_RESTART_RESET_AFTER:-600}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 WORLD_PRESET_TYPE="${WORLD_PRESET_TYPE:-}"
@@ -117,6 +120,9 @@ export HOME="${HOME:-/home/steam}"
 require_number "MAX_PLAYERS" "$MAX_PLAYERS"
 require_number "SERVER_PORT" "$SERVER_PORT"
 require_number "CONFIG_BOOT_TIMEOUT" "$CONFIG_BOOT_TIMEOUT"
+require_number "SERVER_CRASH_RESTART_ATTEMPTS" "$SERVER_CRASH_RESTART_ATTEMPTS"
+require_number "SERVER_CRASH_RESTART_DELAY" "$SERVER_CRASH_RESTART_DELAY"
+require_number "SERVER_CRASH_RESTART_RESET_AFTER" "$SERVER_CRASH_RESTART_RESET_AFTER"
 require_number "PANEL_PORT" "$PANEL_PORT"
 [ -z "$MOB_HEALTH_MULTIPLIER" ] || require_float "MOB_HEALTH_MULTIPLIER" "$MOB_HEALTH_MULTIPLIER"
 [ -z "$MOB_DAMAGE_MULTIPLIER" ] || require_float "MOB_DAMAGE_MULTIPLIER" "$MOB_DAMAGE_MULTIPLIER"
@@ -630,7 +636,10 @@ start_server_foreground() {
 }
 
 prepare_server() {
-  if [ ! -x "$SERVER_EXEC" ] || is_truthy "$UPDATE_ON_START"; then
+  if [ "${SKIP_UPDATE_ONCE:-0}" = "1" ] && [ -x "$SERVER_EXEC" ]; then
+    log "Steam update skipped for immediate crash retry"
+    SKIP_UPDATE_ONCE=0
+  elif [ ! -x "$SERVER_EXEC" ] || is_truthy "$UPDATE_ON_START"; then
     update_server
   fi
 
@@ -665,15 +674,20 @@ mkdir -p "$WINDROSE_CONTROL_DIR" "$WINDROSE_VERSION_DIR"
 clear_control_action
 start_panel
 
+SKIP_UPDATE_ONCE=0
+crash_retries=0
+
 while true; do
   prepare_server
   log "Starting Windrose dedicated server"
   write_runtime_state "running"
   start_windrose_plus_dashboard
+  run_started=$SECONDS
   set +e
   start_server_foreground
   status=$?
   set -e
+  run_duration=$((SECONDS - run_started))
   trap 'shutdown_all; exit 143' TERM INT
 
   case "$status" in
@@ -684,6 +698,22 @@ while true; do
     76)
       wait_while_stopped
       continue
+      ;;
+    139)
+      if [ "$run_duration" -ge "$SERVER_CRASH_RESTART_RESET_AFTER" ]; then
+        crash_retries=0
+      fi
+      crash_retries=$((crash_retries + 1))
+      if [ "$crash_retries" -le "$SERVER_CRASH_RESTART_ATTEMPTS" ]; then
+        log "Windrose exited with segmentation fault after ${run_duration}s; retrying in ${SERVER_CRASH_RESTART_DELAY}s (${crash_retries}/${SERVER_CRASH_RESTART_ATTEMPTS})"
+        write_runtime_state "crashed"
+        SKIP_UPDATE_ONCE=1
+        sleep "$SERVER_CRASH_RESTART_DELAY"
+        continue
+      fi
+      log "Windrose exited with segmentation fault after ${run_duration}s; retry limit reached"
+      shutdown_all
+      exit "$status"
       ;;
     *)
       shutdown_all
