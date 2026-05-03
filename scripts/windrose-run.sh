@@ -77,6 +77,8 @@ CONFIG_BOOT_TIMEOUT="${CONFIG_BOOT_TIMEOUT:-420}"
 SERVER_CRASH_RESTART_ATTEMPTS="${SERVER_CRASH_RESTART_ATTEMPTS:-3}"
 SERVER_CRASH_RESTART_DELAY="${SERVER_CRASH_RESTART_DELAY:-45}"
 SERVER_CRASH_RESTART_RESET_AFTER="${SERVER_CRASH_RESTART_RESET_AFTER:-600}"
+SERVER_READY_TIMEOUT="${SERVER_READY_TIMEOUT:-300}"
+SERVER_BROKEN_REGISTRATION_RESTART_DELAY="${SERVER_BROKEN_REGISTRATION_RESTART_DELAY:-30}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 WORLD_PRESET_TYPE="${WORLD_PRESET_TYPE:-}"
@@ -123,6 +125,8 @@ require_number "CONFIG_BOOT_TIMEOUT" "$CONFIG_BOOT_TIMEOUT"
 require_number "SERVER_CRASH_RESTART_ATTEMPTS" "$SERVER_CRASH_RESTART_ATTEMPTS"
 require_number "SERVER_CRASH_RESTART_DELAY" "$SERVER_CRASH_RESTART_DELAY"
 require_number "SERVER_CRASH_RESTART_RESET_AFTER" "$SERVER_CRASH_RESTART_RESET_AFTER"
+require_number "SERVER_READY_TIMEOUT" "$SERVER_READY_TIMEOUT"
+require_number "SERVER_BROKEN_REGISTRATION_RESTART_DELAY" "$SERVER_BROKEN_REGISTRATION_RESTART_DELAY"
 require_number "PANEL_PORT" "$PANEL_PORT"
 [ -z "$MOB_HEALTH_MULTIPLIER" ] || require_float "MOB_HEALTH_MULTIPLIER" "$MOB_HEALTH_MULTIPLIER"
 [ -z "$MOB_DAMAGE_MULTIPLIER" ] || require_float "MOB_DAMAGE_MULTIPLIER" "$MOB_DAMAGE_MULTIPLIER"
@@ -556,11 +560,14 @@ wait_while_stopped() {
 }
 
 start_server_foreground() {
-  local run_pid tail_pid status saw_process=0 deadline
-  deadline=$((SECONDS + 180))
+  local run_pid tail_pid status saw_process=0 process_deadline ready_deadline
+  local log_start_line current_log_lines recent_log ready_seen=0
+  process_deadline=$((SECONDS + 180))
+  ready_deadline=$((SECONDS + SERVER_READY_TIMEOUT))
 
   mkdir -p "$(dirname "$SERVER_LOG")"
   touch "$SERVER_LOG" || true
+  log_start_line="$(wc -l < "$SERVER_LOG" 2>/dev/null || printf '0')"
 
   tail -n 0 -F "$SERVER_LOG" &
   tail_pid=$!
@@ -612,11 +619,37 @@ start_server_foreground() {
       stop_server
       wait "$run_pid" >/dev/null 2>&1 || true
       return 1
-    elif [ "$SECONDS" -ge "$deadline" ]; then
+    elif [ "$SECONDS" -ge "$process_deadline" ]; then
       log "Windrose process did not become visible within 180 seconds"
       stop_server
       wait "$run_pid" >/dev/null 2>&1 || true
       return 1
+    fi
+
+    if [ "$ready_seen" -eq 0 ] && [ -f "$SERVER_LOG" ]; then
+      current_log_lines="$(wc -l < "$SERVER_LOG" 2>/dev/null || printf '0')"
+      if [ "$current_log_lines" -lt "$log_start_line" ]; then
+        log_start_line=0
+      fi
+      if [ "$current_log_lines" -gt "$log_start_line" ]; then
+        recent_log="$(tail -n +"$((log_start_line + 1))" "$SERVER_LOG" 2>/dev/null || true)"
+        if printf '%s\n' "$recent_log" | grep -Fq "Host server is ready for owner to connect"; then
+          ready_seen=1
+          log "Windrose host registration is ready"
+        elif printf '%s\n' "$recent_log" | grep -Eq "SetBrokenState|Cannot create Coop NetServer|Server Authorization failed|Server registration finished with error|Cannot establish connection to HTTP server"; then
+          log "Windrose host registration failed before the server became ready"
+          stop_server
+          wait "$run_pid" >/dev/null 2>&1 || true
+          return 77
+        fi
+      fi
+    fi
+
+    if [ "$ready_seen" -eq 0 ] && [ "$SECONDS" -ge "$ready_deadline" ]; then
+      log "Windrose did not report host readiness within ${SERVER_READY_TIMEOUT}s"
+      stop_server
+      wait "$run_pid" >/dev/null 2>&1 || true
+      return 77
     fi
     sleep 5
   done
@@ -697,6 +730,14 @@ while true; do
       ;;
     76)
       wait_while_stopped
+      continue
+      ;;
+    77)
+      log "Retrying Windrose after failed host registration in ${SERVER_BROKEN_REGISTRATION_RESTART_DELAY}s"
+      write_runtime_state "restarting"
+      crash_retries=0
+      SKIP_UPDATE_ONCE=1
+      sleep "$SERVER_BROKEN_REGISTRATION_RESTART_DELAY"
       continue
       ;;
     139)

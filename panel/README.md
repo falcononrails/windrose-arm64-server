@@ -7,6 +7,7 @@ It is designed for community servers that run Windrose+ and optionally WindroseR
 ## Features
 
 - Live Windrose status from Windrose+
+- Join readiness from the game log, so a running-but-unregistered server is shown separately from a joinable one
 - CPU, memory, disk, process, and service state
 - Start, stop, and restart the Windrose systemd service
 - State-aware service controls that disable invalid actions like starting an already-running server

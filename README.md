@@ -167,6 +167,8 @@ Available environment variables:
 | `SERVER_CRASH_RESTART_ATTEMPTS` | `3` | Number of in-container retries after Windrose exits with segmentation fault `139` |
 | `SERVER_CRASH_RESTART_DELAY` | `45` | Seconds to wait before retrying after a segmentation fault |
 | `SERVER_CRASH_RESTART_RESET_AFTER` | `600` | Runtime in seconds after which the crash retry counter is reset |
+| `SERVER_READY_TIMEOUT` | `300` | Seconds to wait for Windrose to register and report host readiness before retrying |
+| `SERVER_BROKEN_REGISTRATION_RESTART_DELAY` | `30` | Seconds to wait before retrying after a failed host registration |
 | `EXTRA_ARGS` | empty | Extra arguments passed to the server executable |
 | `TZ` | `UTC` | Container timezone |
 | `PUID` | `1000` | UID used for persisted files |
@@ -351,6 +353,8 @@ docker compose exec windrose tail -n 200 /server/R5/Saved/Logs/R5.log
 During first Wine/Hangover setup you may see `wine: failed to start L"C:\\windows\\sysarm32\\rundll32.exe": c0000135`. That line is expected on this ARM64 stack if the server continues booting and reaches registration in the logs.
 
 If the game exits with `Segmentation fault (core dumped)` or container exit code `139`, that is usually a Windrose/Wine/Hangover runtime crash rather than a Docker configuration error. The image retries those crashes in-container by default, waits `SERVER_CRASH_RESTART_DELAY` seconds, skips the next SteamCMD validate, and starts the game again. Increase `SERVER_CRASH_RESTART_ATTEMPTS` if your Oracle ARM host occasionally needs more retries after a long session or abrupt player disconnect.
+
+The wrapper also watches startup registration. If Windrose starts but the backend registration fails, or the log never reaches `Host server is ready for owner to connect` within `SERVER_READY_TIMEOUT`, the image stops Wine cleanly and retries after `SERVER_BROKEN_REGISTRATION_RESTART_DELAY`.
 
 Check whether the Windrose process is running:
 

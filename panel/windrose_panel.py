@@ -46,6 +46,14 @@ UPDATE_LOG = Path(os.getenv("WINDROSE_UPDATE_LOG", "/var/log/windrose-update.log
 ROLLBACK_LOG = Path(os.getenv("WINDROSE_ROLLBACK_LOG", "/var/log/windrose-rollback.log"))
 STEAM_LATEST_CACHE = Path(os.getenv("WINDROSE_STEAM_LATEST_CACHE", str(INSTALL_PARENT / "steam-latest.json")))
 SNAPSHOT_PREFIXES = ("server-before-update-", "server-before-rollback-", "server-snapshot-")
+READY_MARKER = "Host server is ready for owner to connect"
+BROKEN_REGISTRATION_MARKERS = (
+    "SetBrokenState",
+    "Cannot create Coop NetServer",
+    "Server Authorization failed",
+    "Server registration finished with error",
+    "Cannot establish connection to HTTP server",
+)
 RUNTIME_PATHS = (
     "R5/Saved",
     "R5/ServerDescription.json",
@@ -168,6 +176,16 @@ def utc_stamp() -> str:
 
 def iso_from_ts(ts: float) -> str:
     return dt.datetime.fromtimestamp(ts, dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def parse_systemd_timestamp(value: str) -> float | None:
+    value = value.strip()
+    if not value or value.lower() == "n/a":
+        return None
+    try:
+        return dt.datetime.strptime(value, "%a %Y-%m-%d %H:%M:%S %Z").replace(tzinfo=dt.UTC).timestamp()
+    except ValueError:
+        return None
 
 
 def manifest_build(root: Path) -> str:
@@ -718,6 +736,30 @@ def process_info() -> dict[str, Any]:
     return {"cpu": round(total_cpu, 1), "rss": total_rss, "processes": rows}
 
 
+def join_state(service: dict[str, Any]) -> dict[str, Any]:
+    if service.get("active_state") != "active":
+        return {"state": "offline", "joinable": False, "message": "Server process is not running"}
+
+    log_path = GAME_DIR / "R5" / "Saved" / "Logs" / "R5.log"
+    active_ts = parse_systemd_timestamp(str(service.get("active_since") or ""))
+    try:
+        log_mtime = log_path.stat().st_mtime
+    except OSError:
+        return {"state": "starting", "joinable": False, "message": "Waiting for game log"}
+    if active_ts is not None and log_mtime + 5 < active_ts:
+        return {"state": "starting", "joinable": False, "message": "Waiting for current boot log"}
+
+    text = tail_file(log_path, 240_000)
+    if READY_MARKER in text:
+        return {"state": "ready", "joinable": True, "message": "Invite/direct join is ready"}
+
+    for marker in BROKEN_REGISTRATION_MARKERS:
+        if marker in text:
+            return {"state": "registration_failed", "joinable": False, "message": marker}
+
+    return {"state": "starting", "joinable": False, "message": "Waiting for Windrose host registration"}
+
+
 def get_windrose_plus_password() -> str:
     cfg = read_json(GAME_DIR / "windrose_plus.json", {})
     return str(((cfg.get("rcon") or {}).get("password")) or "")
@@ -1032,6 +1074,7 @@ def create_backup() -> dict[str, Any]:
 def build_state() -> dict[str, Any]:
     windrose_service = service_state(SERVICE_NAME)
     dashboard_service = service_state(DASHBOARD_SERVICE)
+    windrose_join = join_state(windrose_service)
     capabilities = mod_layer_state(dashboard_service)
     raw_status = read_json(DATA_DIR / "server_status.json", {})
     status = raw_status if capabilities.get("live_players") else {}
@@ -1083,6 +1126,7 @@ def build_state() -> dict[str, Any]:
             "windrose": windrose_service,
             "windrose_plus": dashboard_service,
         },
+        "join": windrose_join,
         "capabilities": capabilities,
         "host": {
             "cpu_percent": cpu_percent(),
@@ -1392,6 +1436,17 @@ INDEX_HTML = r"""<!doctype html>
     };
     function setText(id, value) { $(id).textContent = value ?? "-"; }
     function servicePill(active) { return active === "active" ? "Online" : active || "Unknown"; }
+    function joinLabel(join, service) {
+      if (service.active_state !== "active") return servicePill(service.active_state);
+      if (join?.state === "ready") return "Joinable";
+      if (join?.state === "registration_failed") return "Registration failed";
+      if (join?.state === "starting") return "Starting";
+      return servicePill(service.active_state);
+    }
+    function joinHint(join, service) {
+      if (join?.state === "ready") return fmtDate(service.active_since);
+      return join?.message || fmtDate(service.active_since);
+    }
     function serviceActionDisabled(action, service) {
       const active = service.active_state === "active";
       const changing = ["activating", "deactivating", "reloading"].includes(service.active_state);
@@ -1486,11 +1541,12 @@ INDEX_HTML = r"""<!doctype html>
       const proc = next.host.process || {};
       const cfg = next.server_config || {};
       const caps = next.capabilities || {};
+      const join = next.join || {};
       $("#server-name").textContent = s.name || cfg.server_name || "Windrose";
       const modeText = caps.mode === "vanilla" ? "Vanilla mode" : `Windrose+ ${s.windrose_plus || "enabled"}`;
-      $("#server-line").textContent = `Invite ${s.invite_code || cfg.invite_code || "-"} · Version ${s.version || cfg.deployment_version || "-"} · Steam build ${liveVersion.build || "-"} · ${modeText}`;
-      setText("#stat-service", servicePill(service.active_state));
-      setText("#stat-uptime", fmtDate(service.active_since));
+      $("#server-line").textContent = `Invite ${s.invite_code || cfg.invite_code || "-"} · Version ${s.version || cfg.deployment_version || "-"} · Steam build ${liveVersion.build || "-"} · ${modeText} · ${joinLabel(join, service)}`;
+      setText("#stat-service", joinLabel(join, service));
+      setText("#stat-uptime", joinHint(join, service));
       setText("#stat-players", caps.live_players ? `${s.player_count ?? 0}/${s.max_players ?? cfg.max_players ?? 0}` : `?/${s.max_players ?? cfg.max_players ?? 0}`);
       setText("#stat-invite", caps.live_players ? `Invite ${s.invite_code || cfg.invite_code || "-"}` : `Invite ${s.invite_code || cfg.invite_code || "-"} · live count unavailable`);
       setText("#stat-cpu", `${next.host.cpu_percent || 0}%`);
