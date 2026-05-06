@@ -169,6 +169,7 @@ Available environment variables:
 | `SERVER_CRASH_RESTART_RESET_AFTER` | `600` | Runtime in seconds after which the crash retry counter is reset |
 | `SERVER_READY_TIMEOUT` | `300` | Seconds to wait for Windrose to register and report host readiness before retrying |
 | `SERVER_BROKEN_REGISTRATION_RESTART_DELAY` | `30` | Seconds to wait before retrying after a failed host registration |
+| `DISABLE_CORE_DUMPS` | `true` | Disable large Wine core dumps after crashes |
 | `EXTRA_ARGS` | empty | Extra arguments passed to the server executable |
 | `TZ` | `UTC` | Container timezone |
 | `PUID` | `1000` | UID used for persisted files |
