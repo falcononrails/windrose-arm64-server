@@ -1630,10 +1630,12 @@ INDEX_HTML = r"""<!doctype html>
         }
       }
       const form = $("#config-form");
-      form.server_name.value = cfg.server_name || "";
-      form.max_players.value = cfg.max_players || 10;
-      form.password_protected.value = String(!!cfg.password_protected);
-      form.password.value = cfg.password || "";
+      if (!$("#tab-config").classList.contains("active")) {
+        form.server_name.value = cfg.server_name || "";
+        form.max_players.value = cfg.max_players || 10;
+        form.password_protected.value = String(!!cfg.password_protected);
+        form.password.value = cfg.password || "";
+      }
       renderVersions(next);
     }
     function escapeHtml(v) {
