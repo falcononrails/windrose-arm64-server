@@ -188,8 +188,14 @@ def parse_systemd_timestamp(value: str) -> float | None:
         return None
 
 
-def runtime_state_timestamp() -> float | None:
+def runtime_state_data() -> dict[str, Any]:
     state = read_json(CONTROL_DIR / "runtime_state.json", {})
+    return state if isinstance(state, dict) else {}
+
+
+def runtime_state_timestamp(state: dict[str, Any] | None = None) -> float | None:
+    if state is None:
+        state = runtime_state_data()
     ts = safe_int(state.get("timestamp"), 0) if isinstance(state, dict) else 0
     return float(ts) if ts > 0 else None
 
@@ -773,9 +779,12 @@ def join_state(service: dict[str, Any]) -> dict[str, Any]:
         return {"state": "offline", "joinable": False, "message": "Server process is not running"}
 
     log_path = GAME_DIR / "R5" / "Saved" / "Logs" / "R5.log"
+    runtime = runtime_state_data()
     active_ts = parse_systemd_timestamp(str(service.get("active_since") or ""))
     if active_ts is None:
-        active_ts = runtime_state_timestamp()
+        active_ts = runtime_state_timestamp(runtime)
+    if str(runtime.get("state") or "") == "ready":
+        return {"state": "ready", "joinable": True, "message": "Invite/direct join is ready"}
     try:
         log_mtime = log_path.stat().st_mtime
     except OSError:

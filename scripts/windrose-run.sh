@@ -635,6 +635,7 @@ start_server_foreground() {
         recent_log="$(tail -n +"$((log_start_line + 1))" "$SERVER_LOG" 2>/dev/null || true)"
         if printf '%s\n' "$recent_log" | grep -Fq "Host server is ready for owner to connect"; then
           ready_seen=1
+          write_runtime_state "ready"
           log "Windrose host registration is ready"
         elif printf '%s\n' "$recent_log" | grep -Eq "SetBrokenState|Cannot create Coop NetServer|Server Authorization failed|Server registration finished with error|Cannot establish connection to HTTP server"; then
           log "Windrose host registration failed before the server became ready"
