@@ -942,13 +942,11 @@ def mod_layer_state(dashboard_state: dict[str, Any] | None = None) -> dict[str, 
     hook_paths = [
         win64 / "dwmapi.dll",
         win64 / "version.dll",
-        win64 / "ue4ss",
     ]
-    windrose_plus_hook = win64 / "ue4ss" / "Mods" / "WindrosePlus" / "enabled.txt"
     source_rcon_dir = win64 / "windrosercon"
     dashboard = dashboard_state or service_state(DASHBOARD_SERVICE)
     hook_installed = any(path.exists() for path in hook_paths)
-    windrose_plus_installed = windrose_plus_hook.exists()
+    windrose_plus_installed = (win64 / "dwmapi.dll").exists()
     source_rcon_installed = source_rcon_dir.exists()
     dashboard_running = dashboard.get("active_state") == "active"
     return {

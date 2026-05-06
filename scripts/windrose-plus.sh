@@ -50,6 +50,20 @@ install_windrose_plus_files() {
     return 67
   fi
 
+  local disabled_proxy="$win64_dir/dwmapi.dll.windrose-plus-disabled"
+  if [ ! -f "$win64_dir/dwmapi.dll" ] && [ -f "$disabled_proxy" ]; then
+    if [ -f "$marker" ] && [ "$(cat "$marker" 2>/dev/null || true)" = "$resolved_version" ]; then
+      log "Restoring Windrose+ $resolved_version from disabled state"
+      mv -f "$disabled_proxy" "$win64_dir/dwmapi.dll"
+      ensure_mods_txt_entry "$mods_dir/mods.txt" "WindrosePlus"
+      if [ -f "$mods_dir/HeightmapExporter/dlls/main.dll" ]; then
+        ensure_mods_txt_entry "$mods_dir/mods.txt" "HeightmapExporter"
+      fi
+    else
+      rm -f "$disabled_proxy"
+    fi
+  fi
+
   if [ -f "$marker" ] \
     && [ "$(cat "$marker" 2>/dev/null || true)" = "$resolved_version" ] \
     && [ -f "$win64_dir/dwmapi.dll" ] \
