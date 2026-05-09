@@ -1458,17 +1458,18 @@ INDEX_HTML = r"""<!doctype html>
       while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
       return `${v.toFixed(i ? 1 : 0)} ${units[i]}`;
     };
-    const fmtDate = (value) => {
+    const fmtDate = (value, withTime = false) => {
       if (!value) return "-";
       const text = String(value).trim();
       const date = new Date(text);
       if (Number.isNaN(date.getTime())) return text;
-      return new Intl.DateTimeFormat(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit"
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const d = String(date.getDate()).padStart(2, "0");
+      const y = String(date.getFullYear()).slice(-2);
+      if (!withTime) return `${m}/${d}/${y}`;
+      return new Intl.DateTimeFormat("en-US", {
+        month: "long", day: "numeric", year: "numeric",
+        hour: "numeric", minute: "2-digit", hour12: true
       }).format(date);
     };
     const api = async (url, opts = {}) => {
@@ -1555,7 +1556,7 @@ INDEX_HTML = r"""<!doctype html>
         const tr = document.createElement("tr");
         const stateLabel = item.live ? "Current" : "Saved locally";
         const action = item.live ? `<span class="mini">Running now</span>` : `<button class="button warn">Switch</button>`;
-        tr.innerHTML = `<td>${escapeHtml(stateLabel)}</td><td>${escapeHtml(item.build || "-")}</td><td>${escapeHtml(item.version || "-")}</td><td class="mini" title="${escapeHtml(item.created || "")}">${escapeHtml(fmtDate(item.created))}</td><td>${fmtBytes(item.size || 0)}</td><td>${action}</td>`;
+        tr.innerHTML = `<td>${escapeHtml(stateLabel)}</td><td>${escapeHtml(item.build || "-")}</td><td>${escapeHtml(item.version || "-")}</td><td class="mini" title="${escapeHtml(item.created || "")}">${escapeHtml(fmtDate(item.created, true))}</td><td>${fmtBytes(item.size || 0)}</td><td>${action}</td>`;
         const btn = tr.querySelector("button");
         if (btn) {
           btn.onclick = () => rollbackVersion(item, live);
@@ -1569,7 +1570,7 @@ INDEX_HTML = r"""<!doctype html>
       } else {
         for (const item of history) {
           const tr = document.createElement("tr");
-          tr.innerHTML = `<td class="mini" title="${escapeHtml(item.time || "")}">${escapeHtml(fmtDate(item.time))}</td><td>${escapeHtml(item.action || "-")}</td><td>${escapeHtml(item.build || "-")}</td><td>${escapeHtml(item.version || "-")}</td><td class="mini">${escapeHtml(item.detail || "-")}</td>`;
+          tr.innerHTML = `<td class="mini" title="${escapeHtml(item.time || "")}">${escapeHtml(fmtDate(item.time, true))}</td><td>${escapeHtml(item.action || "-")}</td><td>${escapeHtml(item.build || "-")}</td><td>${escapeHtml(item.version || "-")}</td><td class="mini">${escapeHtml(item.detail || "-")}</td>`;
           historyBody.appendChild(tr);
         }
       }
