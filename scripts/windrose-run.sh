@@ -197,7 +197,7 @@ write_steam_latest_cache() {
   local latest="$1"
   [ -n "$latest" ] || return 0
   mkdir -p "$(dirname "$WINDROSE_STEAM_LATEST_CACHE")"
-  jq -n --arg latest "$latest" --argjson ts "$(date -u +%s)" '{latest_build:$latest,checked_at:$ts}' > "$WINDROSE_STEAM_LATEST_CACHE"
+  jq -n --arg latest "$latest" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{latest_build:$latest,checked_at:$ts}' > "$WINDROSE_STEAM_LATEST_CACHE"
 }
 
 version_pin_target() {
